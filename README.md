@@ -91,4 +91,4 @@ Notes and tips
 - Keep PDF/text sources small while experimenting; bigger corpora will slow local embedding and increase storage.
 
 License
-- Personal learning project; choose a license before publishing/sharing externally.
+- MIT License
