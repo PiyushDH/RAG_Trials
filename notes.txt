@@ -1,0 +1,43 @@
+Iteration 1 Notes:
+
+RAG maturity: very early/basic. The notebook loads PDFs, chunks them, builds SentenceTransformer embeddings into a Chroma collection, and can run a raw similarity query. There’s no response synthesis with an LLM, no reranking/hybrid search, no dedup/upsert, and no evaluation harness.
+
+- Strengths (notebook/pdf_loader.ipynb)
+
+Uses PyMuPDF loader (fast, layout-aware) and RecursiveCharacterTextSplitter with overlap, so pages are ingested into semi-reasonable chunks.
+SentenceTransformer all-MiniLM-L6-v2 is a solid lightweight encoder for a first pass.
+Chroma is configured as a persistent store (../data/vector_store), so vectors survive restarts.
+Retrieval wrapper returns similarity scores and metadata, giving visibility into what was matched.
+
+- Weaknesses / bugs
+
+Ingestion always appends with random UUIDs; reruns will balloon the store with duplicates and you can’t upsert or filter by source (notebook/pdf_loader.ipynb, VectorStore.add_documents).
+Metadata is thin (source_file, file_path='pdf'), no page numbers or chunk IDs; weak for debugging or UI citations.
+Chunking is naive (length-only) and may split mid-sentence; no cleaning (PDF artifacts, headers/footers) or title-aware chunking.
+Retrieval uses raw Chroma similarity only; no reranker, no hybrid lexical search, and no score-thresholding tied to a use-case.
+No generative step: the pipeline ends at returning chunks, so it’s not a full RAG answerer.
+Error handling is minimal: PyPDF fallback isn’t actually used, and there’s no guard for empty docs/chunks.
+
+- Actionable improvements
+
+Deterministic IDs/upserts: derive IDs from source_file + page + chunk_index and use upsert() or clear collection before rebuild to prevent duplicates.
+Richer metadata: add page_number, chunk_index, source_path, and maybe section titles; keep original page text for citation.
+Smarter chunking: clean text (strip headers/footers), use sentence-aware chunking (~350–700 tokens) with overlap tuned down unless pages are very dense.
+Retrieval quality: add a reranker (e.g., bge-reranker, Cohere ReRank) on top_k~20, or use a hybrid pipeline (BM25 + dense) before rerank.
+Response synthesis: wrap retrieval in an LLM prompt that cites sources (in-ctx CONTEXT: ... + Answer with citations [source_file p. x]); include a “don’t know” rule if scores fall below a threshold.
+Freshness/control: implement a rebuild command to wipe and re-index, and a filter to restrict to a given source_file when needed (e.g., resume-only vs. guide-only).
+Evaluation: create a small set of Q/A pairs from the PDFs and run retrieval metrics (hit-rate, MRR) plus manual spot checks of final answers with citations.
+
+- Dataset-specific guidance (from the PDFs)
+
+data/pdfs/Building a Personal Portfolio Q&A Chatbot.pdf: content covers Next.js vs React pros/cons, Vercel + custom domains, and what personal data to collect (bio, resume Q&A, FAQ, hobbies). Queries should mention these topics explicitly: “What advantages does Next.js have over React for SEO on a portfolio chatbot?”, “Can I host my chatbot API on Vercel with my own domain?”, “What personal data should I prepare for a portfolio Q&A bot?”
+data/pdfs/Piyush Hemnani_MLE_AI_Automation_Microsoft.pdf: this is a one-page resume (education, skills, projects: multi-agent pipeline cutting Jira updates 80–90%, OCR automation 96% acc/93% precision, tech stack). Good queries: “What reductions did Piyush achieve on BA story updates and with which stack?”, “What is his AI MSc GPA and graduation date?”, “What OCR performance metrics are reported?”, “Which MLOps tools does he list?”
+
+- How to query for best accuracy
+
+Be specific and anchored to the doc facts: include numbers, tool names, or sections (“What GPA is listed?”, “Which stack was used for the Jira automation?”) rather than broad prompts.
+If you mix domains, filter by source_file in the retriever (resume vs. guide), so answers don’t blend both PDFs.
+Ask for citations so you can see which chunk was used and adjust chunking/metadata if results look off.
+If answers seem fuzzy, lower chunk size, add a reranker, and cap retrieval to the most relevant source file.
+
+- Possible next steps: implement deterministic IDs + rebuild flow, add metadata/page numbers, integrate a reranker + simple LLM answerer with citations, and create a small eval set of 10–15 Q/A pairs from these PDFs to tune chunking and thresholds.
